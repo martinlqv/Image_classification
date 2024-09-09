@@ -1,0 +1,585 @@
+---
+title: "Assignment 4"
+author: "Martin Lindqvist"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, messages = FALSE)
+```
+
+## Task 1
+
+### Introduction
+Principal Component Analysis is a common dimensionality reduction technique used to create uncorrelated components that keeps as much of the variance as possible, while significantly fewer variables. These components can be used for exploratory data analysis or as components in machine learning models. In this assignment we will explore two different approaches to finding principal components that makes the data linearly separable.
+
+We begin by simulating data with complex non-linear relationships. We then demonstrate two methods: feature mapping, where we transform the data to a higher dimensional space for linear separation, and the kernel trick which manipulates the data without transforming it to a higher dimensional space.
+
+
+### Data
+The data was generated such that it is not linearly separable. The data consists of two groups, the distribution of both groups can be seen as oval shapes with one group laying inside the other as seen in plot 1.
+
+```{r}
+DGP_ellipse <- function(N = 50, seed = 8312){
+  # Set seed
+  set.seed(seed)
+  
+  # Define a function to calculate y-values of an ellipse
+  oval_fun <- function(x,a=1,b=0.5){b*sqrt(1-(x/a)^2)}
+  
+  # Generate the first half of the data points within the ellipse
+  x11 = runif(N, -1, 1) # Random x-values
+  x12 = c(oval_fun(x11[1:(.5*N)]),-oval_fun(x11[(.5*N+1):N])) + rnorm(N, 0, 0.05)
+  
+  # Combine the x and y values
+  X = cbind(x11, x12)
+  
+  # Generate the second half of the data points within a larger ellipse
+  x21 = runif(N, -1.5, 1.5)
+  x22 = c(oval_fun(x21[1:(.5*N)],a=1.5,b=0.75),-oval_fun(x21[(.5*N+1):N],a=1.5,b=0.75)) + rnorm(N, 0, 0.05)
+  
+  # Combine the x and y values
+  X = rbind(X, cbind(x21,x22))
+  
+  # Rotate the data using a rotation matrix
+  Q = eigen(matrix(c(1,-4,-4,1),2,2))$vectors
+  X = X%*%Q
+  
+  # Create a vector of labels for the two groups
+  y = c(rep(1,N), rep(0, N))
+  
+  # Combine the labels with the data points
+  d = cbind(y, X)
+  
+  # Return the data points
+  return(d)
+}
+d = DGP_ellipse()
+```
+
+```{r}
+# Extract the features
+X = d[,-1]
+
+# Extract the labels
+y = d[,1]
+
+# Plot the data
+plot(X, pch=20, col = y+2, xlab = "X1", ylab = "X2", asp = 1, cex = 1, main = "Simulated data", sub = "Plot 1")
+```
+
+### Feature mapping
+
+The original data consists of two features and a response class. The data is initially transformed via the following feature mapping:
+
+$$
+\phi(\mathbf{x}_1, \mathbf{x}_2) = (x_1^2, \sqrt{2} x_1 x_2, x_2^2)
+$$
+
+Then the new features are saved in a new matrix $H$. 
+
+$$
+H = \begin{bmatrix}
+h1_{1} & h2_{1} & h3_{1} \\
+\vdots & \vdots & \vdots \\
+h1_{100} & h2_{100} & h3_{100} \\
+\end{bmatrix}
+$$
+The matrix is centred by subtracting the column means and saved in a new matrix $HH$.
+
+$$
+HH = \begin{bmatrix}
+h1_{1} & h2_{1} & h3_{1} \\
+\vdots & \vdots & \vdots \\
+h1_{100} & h2_{100} & h3_{100} \\
+\end{bmatrix}-\begin{bmatrix}
+\bar{h1} & \bar{h2} & \bar{h3} \\
+\vdots & \vdots & \vdots \\
+\bar{h1} & \bar{h2} & \bar{h3} \\
+\end{bmatrix}
+$$
+The transpose of $HH$ is multiplied by $HH$ and saved in matrix $S$.
+
+$S = HH^T HH$
+
+We then use the `eigen` function to get the eigenvectors that correspond to the principal components and save it as $P$.
+
+$$
+P = \begin{bmatrix}
+0.5217520 & -0.6628223 & 0.5370675 \\
+0.7911687 & 0.1404677 & -0.5952486 \\
+0.3191034 & 0.7354832 & 0.5976935 \\
+\end{bmatrix}
+$$
+We then project the data onto the principal components and save it as $z$.
+
+$$
+z = HH P
+$$
+
+The third principal component of $z$ is plotted below in plot 2. We can see the the two classes are linearly separable using the third principal component.
+
+```{r}
+# Preform a non-linear transformation of the original features
+
+# Square the first feature
+h1 <- X[,1]^2
+# Product of the features scaled by sqrt(2)
+h2 <- sqrt(2)*X[,1]*X[,2]
+# Square the second feature
+h3 <- X[,2]^2
+
+# Combine the transformed features into a new data matrix
+H = cbind(h1,h2,h3)
+
+# Determine the number of observations
+n = dim(H)[1]
+
+# Compute the column means of the transformed matrix
+M_h = matrix(rep(colMeans(H), n), byrow = T, ncol = 3)
+
+# Centrer the transformed data by subtracting the column means
+HH = H-M_h
+
+# Transpose HH and multiply it with HH
+S = t(HH)%*%HH
+
+# Perform eigen decomposition
+P = eigen(S)$vectors # Principal components
+
+# Project the data onto the principal components
+z = HH%*%P
+
+# The 3rd column of z is informative
+plot(z[,3], rep(0,n), pch=20, col = y+2, xlab = "Z3", ylab = "", yaxt = "n", main = "Third principal component from feature mapping", asp = 1, cex = 1, sub = "Plot 2")
+```
+
+### Kernel trick
+
+To get the same results without feature mapping we use the kernel trick.
+
+We choose the polynomial kernel $\kappa_\phi (x_i, x_j) = (c + \xi x_i^{\top} x_j)^M$ and set $M = 2$, $\xi = 1$ and $c = 0$ to get $\kappa_\phi (x_i, x_j) = (x_i^{\top} x_j)^2$ which corresponds to the earlier feature mapping $\phi(\mathbf{x}_1, \mathbf{x}_2) = (x_1^2, \sqrt{2} x_1 x_2, x_2^2)$.
+
+This means that instead of transforming the whole dataset we can manipulate the inner product to achieve the same results.
+
+We start by computing the inner product of the rows of X and square each of these values, saving the result in a new matrix K.
+
+$$
+K = (XX^T)^2
+$$
+We then centralise the data to obtain the Gram matrix.
+
+$$
+K^{*} = K - CK - KC + CKC
+$$
+Where C is a 100 by 100 matrix:
+$$
+C = \begin{bmatrix}
+\frac{1}{100} & \dots & \frac{1}{100} \\
+\vdots & \ddots & \vdots \\
+\frac{1}{100} & \dots & \frac{1}{100} \\
+\end{bmatrix}
+$$
+
+We then use the `eigen` function to do eigen decomposition on $K^{*}$ to get the eigen values and eigen vectors.
+
+To get the third principal component we multiply the square root of the third eigen value by the third eigen vector.
+
+$$
+\sqrt\lambda_{3}e_{3}
+$$
+
+```{r}
+# 1
+# Polynomial kernel
+
+# 2
+K <- (X %*% t(X))^2
+#dim(K)
+
+# 3
+
+n <- dim(K)[1]
+
+C <- matrix(1 / n, n, n)
+
+K_star <- K - C %*% K - K %*% C + C %*% K %*% C
+
+# 4
+
+eigen_result <- eigen(K_star)
+
+
+# 5
+lambda_3 <- eigen_result$values[3]
+e_3 <- eigen_result$vectors[, 3]
+
+PC <- sqrt(lambda_3) * e_3
+
+# Plot
+plot(PC, rep(0,n), pch=20, col = y+2, xlab = "Z3", ylab = "", yaxt = "n", main = "Third principal component from kernel trick", asp = 1, cex = 1, sub = "Plot 3")
+```
+
+### Discussion
+
+We can see in **plot 2** and **plot 3** that both methods can find the third principal component that makes the data linearly separable. The kernel trick does not need to transform the data in to a higher dimensional space. Instead it computes the inner products in the new feature space, which is much more computationally efficient. It also bypasses the need to store this higher dimensional data, which makes it much more memory efficient. These two benefits makes this method more scalable on larger datasets. Given these advantages, I would opt for the kernel trick.
+
+
+## Task 2
+
+### Introduction
+
+Three different methods have been trained for image classification: Support Vector Machine (SVM), Artificial Neural Network (ANN) and Convolutional Neural Network. We will start by exploring the data before looking at each model separately and finally compare the performance.
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+library(e1071)
+library(tidyverse)
+library(keras)
+```
+
+
+### Data
+
+The data is a subset of the "Fashion-MNIST" data and consists of 30,000 observations of images belonging to one of 10 classes:
+
+0 = T-shirt/top
+
+1 = Trouser
+
+2 = Pullover
+
+3 = Dress
+
+4 = Coat
+
+5 = Sandal
+
+6 = Shirt
+
+7 = Sneaker
+
+8 = Bag
+
+9 = Ankle boot
+
+```{r}
+# Load the fashion dataset
+load("fashion_data.Rdata")
+fashion_data <- as.data.frame(data)
+```
+
+The data is then randomly split in to training (80%) and testing (20%) data. To prepare the data for SVM we separate the features and the labels, and set the labels to factors. To prepare the data for ANN and CNN we do one-hot encoding for the categorical variables and normalise the features.
+
+```{r}
+# Set seed
+set.seed(4277)
+
+# Split in to training and testing sets
+sample_seq <- sample(seq_len(nrow(fashion_data)), size = floor(0.80 * nrow(fashion_data)))
+fashion_train <- fashion_data[sample_seq, ]
+fashion_test <- fashion_data[-sample_seq, ]
+
+# Separate the labels and features
+train_labels <- fashion_train$label
+train_labels_factor <- as.factor(train_labels)
+train_features <- fashion_train %>% select(-label)
+
+test_labels <- fashion_test$label
+test_labels_factor <- as.factor(test_labels)
+test_features <- fashion_test %>% select(-label)
+```
+
+
+```{r}
+# Normalise the feature data
+train_features_norm <- as.matrix(train_features / 255)
+test_features_norm <- as.matrix(test_features / 255)
+
+# One-hot encode the labels
+train_labels_one_hot <- to_categorical(train_labels)
+test_labels_one_hot <- to_categorical(test_labels)
+```
+
+
+### SVM
+
+Support Vector Machines (SVM) use the kernel trick to separate the data in to different classes. SVMs are known to be computationally intensive. We therefore calculate the principal components and use a few of them as inputs to speed up the training process.
+
+```{r}
+# Principal component analysis for the training data
+pca <- prcomp(train_features, scale. = TRUE)
+
+# Calculate the explained variance
+explained_variance <- cumsum(pca$sdev^2) / sum(pca$sdev^2)
+
+# Set the number of components to use
+num_components <- 14
+
+# Plot the explained
+plot(explained_variance,
+     xlim = c(0, 100),
+     ylim = c(0, 1),
+     type = 'b',
+     xlab = "Number of Principal Components", 
+     ylab = "Cumulative Proportion of Variance Explained",
+     main = "PCA - Variance Explained",
+     sub = "Plot 4")
+
+# Add a vertical line at 14 components
+abline(v = num_components, col = "blue", lwd = 2)
+
+# Add a horizontal line at the intersection point
+abline(h = explained_variance[num_components], col = "blue", lwd = 2)
+
+# Save the pca with the appropriate number of components
+features_train_pca <- pca$x[, 1:num_components]
+
+# Transform the test data using the same principal components
+features_test_pca <- predict(pca, test_features)[, 1:num_components]
+
+```
+
+In **plot 4** we can see the variance explained as we use more principal components. The amount of variance explained for each additional component decrease as the number of components increase, meaning that we get the most effect/component for the first few components. The number of principal components are set to 14 (the reasoning for this will be explained in the tuning section).
+
+#### Tuning and training
+
+To train the model the `e1071` package's `svm` function was used. Type was set to `C-classification` since this is a classification problem. For the kernel function it was set to `radial` (radial basis function) since it is often a good fit for both simpler and more complex relationships within the data. It only has one hyper parameter, which makes the model easier to tune. The model uses a soft margin classifier by default since using a hard margin classifier would likely overfit the model to the training data. This leaves us with two hyper parameters to tune: the `gamma` from the `radial` kernel, and the `cost` function that indicates how severely misclassifications should be treated.
+
+Due to the time consuming nature of tuning SVM's and my lack of computational power some guessing had to be done in tuning the model. The number of principal components was initially set to 10. Then the cost and gamma was tuned separately (due to my lack of computational power) using the `svm.fit` function for `e1071` using 5 fold cross validation. After each iteration the best value was choose and a new range of values to try was set for the other parameter. After a few iterations the best values was `cost` = 2.5 and `gamma` = 0.3. This model was then trained with different number of principal components. Out of the range from 5 to 25, 14 gave the best results on the testing data.
+
+```{r}
+# Tuning svm
+
+#tune_out <- tune.svm(features_train_pca, train_labels_factor,
+                     #type = "C-classification",
+                     #kernel = "radial",
+                     #cost = 2.5, # Adjust here
+                     #gamma = c(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8), # Adjust here
+                     #tunecontrol = tune.control(cross = 5))
+
+#tune_out$best.parameters$cost
+#tune_out$best.parameters$gamma
+
+# Best values
+# cost = 2.5
+# gamma = 0.3
+```
+
+```{r}
+# Tuning number of principal components
+
+# Initialise vectors to store training and test accuracies
+#training_accuracies <- numeric(21)
+#testing_accuracies <- numeric(21)
+#component_numbers <- 5:25
+
+# Loop over the range of principal components
+#for (num_components in component_numbers) {
+  
+  # Apply PCA with the current number of components
+  #pca <- prcomp(train_features, scale. = TRUE)
+  
+  # Select the specified number of components
+  #features_train_pca <- pca$x[, 1:num_components]
+  
+  # Transform the test data using the same principal components
+  #features_test_pca <- predict(pca, test_features)[, 1:num_components]
+  
+  # Train the SVM model on the training data with the reduced number of components
+  #fashion_svm <- svm(features_train_pca, train_labels_factor,
+                     #type = "C-classification",
+                     #kernel = "radial",
+                     #cost = 2.5,
+                     #gamma = 0.3)
+  
+  # Predict on the training set and calculate accuracy
+  #train_pred <- predict(fashion_svm, features_train_pca)
+  #train_acc <- mean(train_pred == train_labels_factor)
+  
+  # Predict on the test set and calculate accuracy
+  #test_pred <- predict(fashion_svm, features_test_pca)
+  #test_acc <- mean(test_pred == test_labels_factor)
+  
+  # Store the accuracies
+  #training_accuracies[num_components - 4] <- train_acc
+  #testing_accuracies[num_components - 4] <- test_acc
+  
+  # Print the number of components and corresponding accuracies
+  #cat("Number of components:", num_components, 
+      #"Training accuracy:", train_acc, 
+      #"Testing accuracy:", test_acc, "\n")
+#}
+
+#
+
+```
+
+The final model gave a training accuracy of 91.56% and a test accuracy of 84.65%.
+
+
+```{r, include=FALSE}
+# Fit SVM
+fashion_svm <- svm(features_train_pca, train_labels_factor,
+                   type = "C-classification",
+                   kernel = "radial",
+                   cost = 2.5,
+                   gamma = 0.3)
+
+# Print model details
+print(fashion_svm)
+
+# Predict on training data
+train_pred <- predict(fashion_svm, features_train_pca)
+# Calculate train accuracy
+train_acc <- mean(train_pred == train_labels_factor)
+train_acc
+
+# Predict on testing data
+test_pred <- predict(fashion_svm, features_test_pca)
+# Calculate test accuracy
+test_acc <- mean(test_pred == test_labels_factor)
+test_acc
+```
+
+
+## ANN
+
+Artificial Neural Networks (ANN) uses one or multiple layers of nodes often called neurons for a number of different tasks, including regression and classification problems. Each node in the network performs simple computations and passes its output to the subsequent layer. During the training process the weights between the nodes are adjusted to minimise the difference between the predictions and the target.
+
+To train this model the `keras` package was used. The model consists of three hidden layers with 128, 24 and 24 nodes in each layer, respectively. The activation function for the three hidden layers is set to `relu` (Rectified Linear Unit) as $f(x) = max(0,x)$. If $x$ is negative the function will return zero, else it will return $x$. This function is chosen for its ability to reduce vanishing gradient problem. Following hidden layers, comes an output layer with 10 nodes (since we have 10 classes). The activation function for the output layer is set to `softmax` which gives each class an probability of occurring. The class with the highest probability is then chosen as the models final prediction.
+
+
+```{r, include=FALSE}
+# Initialise an ANN model
+model_ann <- keras_model_sequential() %>%
+  # First hidden layer with 128 neurons and ReLU activation
+  layer_dense(units = 128, activation = 'relu', input_shape = c(ncol(train_features_norm))) %>%
+  # Second hidden layer with 24 neurons nad ReLU activation
+  layer_dense(units = 24, activation = 'relu') %>%
+  # Third hidden layer with 24 neurons and ReLU activation
+  layer_dense(units = 24, activation = 'relu') %>%
+  # Output layer with softmax activation and units equal to the number of classes
+  layer_dense(units = length(unique(train_labels)), activation = 'softmax') # 10
+
+```
+
+The model was compiled with the loss function set to `categorical_crossentropy` which is commonly used for classification problems with multiple classes. The optimiser was set to `optimizer_rmsprop()` (Root Mean Square Propagation). The metrics used to evaluate the model performance was set to `accuracy`.
+
+```{r, include=FALSE}
+# Compile the ANN model
+model_ann %>% compile(loss = "categorical_crossentropy", 
+                    optimizer = optimizer_rmsprop(),
+                    metrics = c("accuracy"))
+
+```
+
+The model was trained over the entire dataset for 30 iterations (`epochs`) with `batch_size` of 128 meaning that the model samples 128 observations per gradient update. The `validation_split` was set to 0.2, meaning that for each iteration the model trained on 80% of the data, and evaluated the loss function and accuracy on the remaining 20%.
+
+```{r,include=FALSE}
+# Set seed
+set.seed(2024)
+
+# Train the model with the training data
+Training_history_ann = model_ann %>% 
+  fit(train_features_norm,
+      train_labels_one_hot,
+      epochs = 30,
+      batch_size = 128,
+      validation_split = 0.2)
+```
+
+In **plot 5** we can see how the how the accuracy increases for each training iteration. After approximately 15 iterations the validation accuracy stops increasing while the training accuracy keeps increasing, indicating overfitting. This can be seen in the loss function as well, where the loss starts to increase after approximately 15 iterations.
+
+```{r, fig.cap = "Plot 5"}
+# Print and plot the training history
+#Training_history_ann
+plot(Training_history_ann)
+```
+
+```{r,include=FALSE}
+# Predict on the testing data and print loss and accuracy
+model_ann %>% evaluate(test_features_norm, test_labels_one_hot)
+```
+The ANN model achieves a test accuracy of 86.65%.
+
+
+## CNN
+
+Convolutional Neural Networks (CNN) works similarly to ANNs, but are especially made for grid data such as images. The main difference is that one or multiple convolutional layers are added in addition to the hidden layers. These convolutional layers add smaller `filters` that are slid along the image to detect patterns such as edges. These layers improves the networks ability to detect and classify images.
+
+The model consists of one convolutional layer with 32 `filters` of size 3x3. The `padding` is set to `same` to ensure the output has the same size as the input. The `relu` activation is used again. Following the convolutional layer a max pooling layer is used to reduce the spatial dimensions of the output by taking the max value of 2x2 non-overlapping girds. Then a flattening layer is used to convert the data from a grid to a vector before sending it to the hidden layer with 100 neurons. Finally we have the output layer with 10 classes that once again uses the `softmax` activation function.
+
+```{r}
+# Reshape the data for CNN
+train_features_cnn <- array_reshape(train_features_norm, c(nrow(train_features_norm), 28, 28, 1))
+test_features_cnn <- array_reshape(test_features_norm, c(nrow(test_features_norm), 28, 28, 1))
+```
+
+
+```{r,include=FALSE}
+# Initialise a CNN model
+model_cnn <- keras_model_sequential() %>%
+  # 2D convolutional layer
+  layer_conv_2d(filters = 32,
+                kernel_size = c(3, 3),
+                padding = "same",
+                activation = "relu", 
+                input_shape = c(28, 28, 1)) %>%
+  # Max pooling layer
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # Flatten the input
+  layer_flatten() %>%
+  # Hidden layer with 100 neurons
+  layer_dense(units = 100,
+              activation = 'relu') %>%
+  # Output layer
+  layer_dense(units = length(unique(train_labels)),
+              activation = 'softmax')
+```
+
+The same process with the same parameters was used for model compilation and training.
+
+```{r,include=FALSE}
+# Compile the model
+model_cnn %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("accuracy")
+)
+```
+
+```{r,include=FALSE}
+set.seed(2024)
+
+# Fit the model on the reshaped training data
+training_history_cnn <- model_cnn %>% fit(
+  train_features_cnn, 
+  train_labels_one_hot, 
+  epochs = 30, 
+  batch_size = 128, 
+  validation_split = 0.2
+)
+```
+
+In **plot 6** is see little to no improvement in accuracy after 10 iterations, with an even more pronounced increase in the loss function compared to the ANN model in **plot 5**.
+
+```{r, fig.cap = "Plot 6"}
+# Print and plot the training history
+#training_history_cnn
+plot(training_history_cnn)
+```
+
+
+```{r, include=FALSE}
+# Predict on the testing data and print loss and accuracy
+evaluation_results <- model_cnn %>% evaluate(test_features_cnn, test_labels_one_hot)
+#print(evaluation_results)
+```
+
+The CNN model achieves a test accuracy of 90.2%.
+
+
+## Discussion
+
+Out of the three models SVM showed the worst results on the training data. It was also by far the most cumbersome to work with. Even though the dataset was small compared to how large datasets for machine learning projects can be in the industry, model fitting and tuning took a long time, even though PCA was used. ANN provided a decent improvement in accuracy, but a huge improvement in the ease it was to work with. The training and tuning of parameters was a lot faster. To no one's surprise the CNN provided the most accurate classifications on the image data. This is because it uses a convolutional layer especially made for this task. The CNN also had the same benefits as ANN in training time. Going forward I would prefer working with ANNs and CNNs for classification tasks on large datasets due to both their performance in classification accuracy and speed of training.
